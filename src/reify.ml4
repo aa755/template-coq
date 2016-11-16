@@ -654,7 +654,10 @@ struct
 	  Term.mkCase (ci, denote_term ty, denote_term d,
 			Array.of_list (List.map denote_branch (from_coq_list brs)))
       | _ -> raise (Failure "ill-typed (case)")
-    else
+    else if Term.eq_constr h tConst then
+      match args with
+      | h::[] -> (unquote_string h)
+      | ->  raise (Failure "ill-typed (const)")
       not_supported trm
 
   let declare_inductive (env: Environ.env) (evm: Evd.evar_map) (body: Constrexpr.constr_expr) : unit =
