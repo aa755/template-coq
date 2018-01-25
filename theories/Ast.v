@@ -179,7 +179,9 @@ Inductive global_reference :=
 (** A monad for programming with template-coq operations.
 Using this monad, it should be possible to write many plugins (e.g. paramcoq)
 in Gallina *)
-Inductive TemplateMonad : Type -> Prop :=
+(* Do we need to make it universe polymorphic? Are there interesting applications
+where we get universe inconsistency in a monomorphic setting?*)
+Inductive TemplateMonad : Type -> Type :=
 (* monadic operations *)
 | tmReturn : forall {A:Type}, A -> TemplateMonad A
 | tmBind : forall {A B : Type}, 
