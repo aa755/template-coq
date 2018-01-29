@@ -207,7 +207,10 @@ struct
     | Some (Right mind_entry) ->
        Some (Right mind_entry)
     | None -> None
-end
+  
+    let unquote_string (t: Ast0.term) = ""
+  
+  end
 
 module TemplateASTReifier = Reify(TemplateASTQuoter)
 

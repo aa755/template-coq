@@ -78,6 +78,7 @@ module type Quoter = sig
 
   val mkExt : quoted_decl -> quoted_program -> quoted_program
   val mkIn : t -> quoted_program 
+  val unquote_string : t -> string
 end
 
 module Reify(Q : Quoter) : sig
