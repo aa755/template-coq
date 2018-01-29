@@ -91,7 +91,7 @@ module Mindset = Names.Mindset
 type ('a,'b) sum =
   Left of 'a | Right of 'b
 
-module type Quoter = sig
+module type Quoter = sig (* Quoter -> QuoterUnquoter? *)
   type t
 
   type quoted_ident
@@ -172,6 +172,9 @@ module type Quoter = sig
 
   val mkExt : quoted_decl -> quoted_program -> quoted_program
   val mkIn : t -> quoted_program
+
+  (*unquoting commands*)
+  val unquote_string : t -> string
 end
 
 (** The reifier to Coq values *)
@@ -566,6 +569,7 @@ struct
        let k = (quote_int (k - 1)) in
        Term.mkApp (tConstructRef, [|quote_inductive (kn ,n); k|])
 
+  let unquote_string (t: Term.constr) = ""
 end
 
 
