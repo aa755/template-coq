@@ -207,7 +207,15 @@ struct
     | Some (Right mind_entry) ->
        Some (Right mind_entry)
     | None -> None
+  
+    let inspectTerm (t : term) :  (term, quoted_int, quoted_ident, quoted_name, quoted_sort, quoted_cast_kind, quoted_kernel_name, quoted_inductive, quoted_univ_instance, quoted_proj) structure_of_term =
+    (* match t with
+    | Coq_tRel n -> Coq_tRel n
+    | _ -> *) failwith "not yet implemented"
+
 end
+
+
 
 module TemplateASTReifier = Reify(TemplateASTQuoter)
 
