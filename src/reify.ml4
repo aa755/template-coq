@@ -198,8 +198,19 @@ module type Quoter = sig
   val mkExt : quoted_decl -> quoted_program -> quoted_program
   val mkIn : t -> quoted_program
 
+  val representsIndConstuctor : quoted_inductive -> Term.constr -> bool
   val inspectTerm : t -> (t, quoted_int, quoted_ident, quoted_name, quoted_sort, quoted_cast_kind, quoted_kernel_name, quoted_inductive, quoted_univ_instance, quoted_proj) structure_of_term
 end
+
+let reduce_hnf env evm (trm : Term.constr) =
+  let trm = Tacred.hnf_constr env evm (EConstr.of_constr trm) in
+  (evm, EConstr.to_constr evm trm)
+
+let reduce_all env evm ?(red=Genredexpr.Cbv Redops.all_flags) trm =
+  let red, _ = Redexpr.reduction_of_red_expr env red in
+  let evm, red = red env evm (EConstr.of_constr trm) in
+  (evm, EConstr.to_constr evm red)
+
 
 (** The reifier to Coq values *)
 module TemplateCoqQuoter =
@@ -595,8 +606,18 @@ struct
        let k = (quote_int (k - 1)) in
        Term.mkApp (tConstructRef, [|quote_inductive (kn ,n); k|])
 
+       let rec app_full trm acc =
+        match Term.kind_of_term trm with
+          Term.App (f, xs) -> app_full f (Array.to_list xs @ acc)
+        | _ -> (trm, acc)
+           
 let inspectTerm (t:Term.constr) :  (Term.constr, quoted_int, quoted_ident, quoted_name, quoted_sort, quoted_cast_kind, quoted_kernel_name, quoted_inductive, quoted_univ_instance, quoted_proj) structure_of_term =
-  failwith "not yet implemented"
+    let (h,args) = app_full t [] in
+    if Term.eq_constr h tRel then
+      match args with
+	    x :: _ -> ACoq_tRel x
+      | _ -> raise (Failure "ill-typed")
+    else raise (Failure "not yet implemented")
 end
 
 
@@ -1025,25 +1046,43 @@ struct
       | Globnames.ConstructRef _ -> None (* FIX?: return the enclusing mutual inductive *)
       | Globnames.VarRef _ -> None
     in Q.quote_entry entry
+
+    (* TODO: replace app_full by this abstract version?*)
+    let rec app_full_abs (trm: Q.t) (acc: Q.t list) =
+      match Q.inspectTerm trm with
+        ACoq_tApp (f, xs) -> app_full_abs f (xs @ acc)
+      | _ -> (trm, acc)
+    
+    let not_supported_verb (t: Q.t) s = failwith s
+    let bad_term (t: Q.t) = not_supported_verb t "bad_term is not yet implemented" 
+
+    let from_coq_pair (t :Q.t) =
+      let (h,args) = app_full_abs t [] in
+      match Q.inspectTerm h, args with
+      | ACoq_tConstruct (i,n,u), _ :: _ :: x :: y :: [] -> 
+        if Q.representsIndConstuctor i TemplateCoqQuoter.c_pair
+        then (x,y) 
+        else bad_term t
+     | _ -> bad_term t
+
+    let rec from_coq_list (t :Q.t) =
+      let (h,args) = app_full_abs t [] in
+      match Q.inspectTerm h with
+      | ACoq_tConstruct (h,n,u) -> 
+        if Q.representsIndConstuctor h TemplateCoqQuoter.c_nil then []
+        else if Q.representsIndConstuctor h TemplateCoqQuoter.c_cons then
+          match args with
+          _ :: x :: xs :: _ -> x :: from_coq_list xs
+          | _ -> bad_term t
+        else
+          not_supported_verb t "from_coq_list"
+      | _ -> not_supported_verb t "from_coq_list"  
 end
 
 module TermReify = Reify(TemplateCoqQuoter)
 
 
 
-let reduce_hnf env evm (trm : Term.constr) =
-  let trm = Tacred.hnf_constr env evm (EConstr.of_constr trm) in
-  (evm, EConstr.to_constr evm trm)
-
-let reduce_all env evm ?(red=Genredexpr.Cbv Redops.all_flags) trm =
-  let red, _ = Redexpr.reduction_of_red_expr env red in
-  let evm, red = red env evm (EConstr.of_constr trm) in
-  (evm, EConstr.to_constr evm red)
-
-let rec app_full trm acc =
-  match Term.kind_of_term trm with
-    Term.App (f, xs) -> app_full f (Array.to_list xs @ acc)
-  | _ -> (trm, acc)
 
 
 module Denote =
@@ -1057,11 +1096,11 @@ struct
       0
     else if Term.eq_constr h tS then
       match args with
-	n :: _ -> 1 + nat_to_int n
+      n :: _ -> 1 + nat_to_int n
       | _ -> not_supported_verb trm "nat_to_int nil"
     else
       not_supported_verb trm "nat_to_int"
-
+  
   let from_bool trm =
     if Term.eq_constr trm ttrue then
       true
@@ -1127,25 +1166,6 @@ struct
 
 
 
-  let from_coq_pair trm =
-    let (h,args) = app_full trm [] in
-    if Term.eq_constr h c_pair then
-      match args with
-	_ :: _ :: x :: y :: [] -> (x, y)
-      | _ -> bad_term trm
-    else
-      not_supported_verb trm "from_coq_pair"
-
-
-  let rec from_coq_list trm =
-    let (h,args) = app_full trm [] in
-    if Term.eq_constr h c_nil then []
-    else if Term.eq_constr h c_cons then
-      match args with
-	_ :: x :: xs :: _ -> x :: from_coq_list xs
-      | _ -> bad_term trm
-    else
-      not_supported_verb trm "from_coq_list"
 
 
   (* This code is taken from Pretyping, because it is not exposed globally *)
