@@ -105,7 +105,31 @@ type ('term, 'nat, 'ident, 'name, 'quoted_sort, 'cast_kind, 'kername, 'inductive
   | ACoq_tProj of 'projection * 'term
   | ACoq_tFix of ('term, 'name, 'nat) amfixpoint * 'nat
   | ACoq_tCoFix of ('term, 'name, 'nat) amfixpoint * 'nat
-      
+
+  type ('term, 'ident, 'kername, 'reductionStrategy, 'mutual_inductive_entry) structure_of_monad_term =
+    | ACoq_tmReturn of 'term
+    | Coq_tmBind of ('term * 'term)
+    | Coq_tmPrint of 'term
+    | Coq_tmFail of char list
+    | Coq_tmEval of  'reductionStrategy * 'term
+    | Coq_tmDefinition of 'ident * 'term
+    | Coq_tmAxiom of 'ident
+    | Coq_tmLemma of 'ident
+    | Coq_tmFreshName of 'ident
+    | Coq_tmAbout of 'ident
+    | Coq_tmCurrentModPath of unit
+    | Coq_tmQuote of 'term
+    | Coq_tmQuoteRec of 'term
+    | Coq_tmQuoteInductive of 'kername
+    | Coq_tmQuoteUniverses of unit
+    | Coq_tmQuoteConstant of 'kername * bool
+    | Coq_tmMkDefinition of 'ident * 'term
+    | Coq_tmMkInductive of 'mutual_inductive_entry
+    | Coq_tmUnquote of 'term
+    | Coq_tmUnquoteTyped of 'term
+    | Coq_tmExistingInstance of 'ident
+
+
 module type Quoter = sig
   type t
 
