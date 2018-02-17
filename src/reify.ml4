@@ -106,9 +106,9 @@ type ('term, 'nat, 'ident, 'name, 'quoted_sort, 'cast_kind, 'kername, 'inductive
   | ACoq_tFix of ('term, 'name, 'nat) amfixpoint * 'nat
   | ACoq_tCoFix of ('term, 'name, 'nat) amfixpoint * 'nat
 
-  type ('term, 'ident, 'kername, 'reductionStrategy, 'mutual_inductive_entry) structure_of_monad_term =
+  type ('monad_term, 'term, 'ident, 'kername, 'reductionStrategy, 'mutual_inductive_entry) structure_of_monad_term =
     | ACoq_tmReturn of 'term
-    | Coq_tmBind of ('term * 'term)
+    | Coq_tmBind of ('monad_term * 'monad_term)
     | Coq_tmPrint of 'term
     | Coq_tmFail of char list
     | Coq_tmEval of  'reductionStrategy * 'term
@@ -165,6 +165,8 @@ module type Quoter = sig
   type quoted_global_decl
   type quoted_global_declarations
   type quoted_program  (* the return type of quote_recursively *)
+  type quoted_reduction_strategy
+  type quoted_monad_term
 
   val quote_ident : Id.t -> quoted_ident
   val quote_name : Name.t -> quoted_name
@@ -252,6 +254,9 @@ module type Quoter = sig
   val print_term : t -> Pp.std_ppcmds
   (* val representsIndConstuctor : quoted_inductive -> Term.constr -> bool *)
   val inspectTerm : t -> (t, quoted_int, quoted_ident, quoted_name, quoted_sort, quoted_cast_kind, quoted_kernel_name, quoted_inductive, quoted_univ_instance, quoted_proj) structure_of_term
+  val reduce_hnf : Environ.env -> Evd.evar_map -> t -> Evd.evar_map * t
+  val reduce_all : Environ.env -> Evd.evar_map -> t -> Evd.evar_map * t
+  val inspect_monad_term: quoted_monad_term -> (quoted_monad_term, t, quoted_ident, quoted_kernel_name, quoted_reduction_strategy, quoted_mind_entry) structure_of_monad_term
 end
 
 let reduce_hnf env evm (trm : Term.constr) =
@@ -303,7 +308,8 @@ struct
   type quoted_program = Term.constr (* of type Ast.program *)
 
   type quoted_reduction_strategy = Term.constr (* of type Ast.reductionStrategy *)
-
+  type quoted_monad_term = Term.constr
+  
   let resolve_symbol (path : string list) (tm : string) : Term.constr =
     gen_constant_in_modules contrib_name [path] tm
 
@@ -773,7 +779,8 @@ struct
       | _ -> bad_term trm
     else
       not_supported_verb trm "from_coq_list"
-        
+
+  
   let inspectTerm (t:Term.constr) :  (Term.constr, quoted_int, quoted_ident, quoted_name, quoted_sort, quoted_cast_kind, quoted_kernel_name, quoted_inductive, quoted_univ_instance, quoted_proj) structure_of_term =
     let (h,args) = app_full t [] in
     if Term.eq_constr h tRel then
@@ -866,6 +873,13 @@ struct
     else
       CErrors.user_err (str"inspect_term: cannot recognize " ++ print_term t)
 
+    let  inspect_monad_term  (t: quoted_monad_term) : (quoted_monad_term, t, quoted_ident, quoted_kernel_name, quoted_reduction_strategy, quoted_mind_entry) structure_of_monad_term =
+      CErrors.user_err (str"not yet implemented " ++ print_term t)
+      
+    let reduce_hnf : Environ.env -> Evd.evar_map -> t -> Evd.evar_map * t = reduce_hnf
+
+    let reduce_all  (env: Environ.env) (evm: Evd.evar_map) (trm: t) : Evd.evar_map * t = reduce_all env evm trm
+          
     let rec unquote_int trm =
       let (h,args) = app_full trm [] in
       if Term.eq_constr h tO then
@@ -1689,7 +1703,7 @@ struct
 
   let rec run_template_program_rec (k : Evd.evar_map * Term.constr -> unit)  ((evm, pgm) : Evd.evar_map * Term.constr) : unit =
     let env = Global.env () in
-    let (evm, pgm) = reduce_hnf env evm pgm in
+    let (evm, (pgm:Term.constr)) = reduce_hnf env evm pgm in
     let (coConstr, args) = app_full pgm [] in
     if Term.eq_constr coConstr tmReturn then
       match args with
