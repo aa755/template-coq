@@ -317,3 +317,29 @@ Inductive TemplateMonad : Type -> Type :=
 
 Instance TemplateMonad_Monad : Monad TemplateMonad :=
   {| ret := @tmReturn ; bind := @tmBind |}.
+
+
+(*
+It is perhaps impossible to implement the tmQuote operation.
+The type of its argument can be arbitrary. We cannot
+go from data of arbitrary types to the kernel representations
+of those data
+
+Definition problem : TemplateMonad term :=
+  tmQuote false.
+
+Definition problem2 : TemplateMonad term :=
+  tmQuote (tmReturn 1).
+
+(*
+Error:
+The term "tmReturn 1" has type "TemplateMonad nat"
+while it is expected to have type "?A"
+(unable to find a well-typed instantiation for "?A": cannot ensure that
+"Type@{max(Set, Template.Ast.49+1, Template.Ast.51+1, Template.Ast.52+1,
+    Template.Ast.53+1, Template.Ast.54+1, Template.Ast.55+1,
+    Template.Ast.56+1, Template.Ast.57+1, Template.Ast.60+1,
+    Template.Ast.61+1, Template.kernel.univ.58)}"
+is a subtype of "Type@{Template.Ast.60}").
+ *)
+*)
