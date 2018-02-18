@@ -108,26 +108,26 @@ type ('term, 'nat, 'ident, 'name, 'quoted_sort, 'cast_kind, 'kername, 'inductive
 
   type ('monad_term, 'term, 'ident, 'kername, 'reductionStrategy, 'mutual_inductive_entry) structure_of_monad_term =
     | ACoq_tmReturn of 'term
-    | Coq_tmBind of ('monad_term * 'monad_term)
-    | Coq_tmPrint of 'term
-    | Coq_tmFail of char list
-    | Coq_tmEval of  'reductionStrategy * 'term
-    | Coq_tmDefinition of 'ident * 'term
-    | Coq_tmAxiom of 'ident
-    | Coq_tmLemma of 'ident
-    | Coq_tmFreshName of 'ident
-    | Coq_tmAbout of 'ident
-    | Coq_tmCurrentModPath of unit
-    | Coq_tmQuote of 'term
-    | Coq_tmQuoteRec of 'term
-    | Coq_tmQuoteInductive of 'kername
-    | Coq_tmQuoteUniverses of unit
-    | Coq_tmQuoteConstant of 'kername * bool
-    | Coq_tmMkDefinition of 'ident * 'term
-    | Coq_tmMkInductive of 'mutual_inductive_entry
-    | Coq_tmUnquote of 'term
-    | Coq_tmUnquoteTyped of 'term
-    | Coq_tmExistingInstance of 'ident
+    | ACoq_tmBind of ('monad_term * 'monad_term)
+    | ACoq_tmPrint of 'term
+    | ACoq_tmFail of char list
+    | ACoq_tmEval of  'reductionStrategy * 'term
+    | ACoq_tmDefinition of 'ident * 'term
+    | ACoq_tmAxiom of 'ident
+    | ACoq_tmLemma of 'ident
+    | ACoq_tmFreshName of 'ident
+    | ACoq_tmAbout of 'ident
+    | ACoq_tmCurrentModPath of unit
+    | ACoq_tmQuote of 'term
+    | ACoq_tmQuoteRec of 'term
+    | ACoq_tmQuoteInductive of 'kername
+    | ACoq_tmQuoteUniverses of unit
+    | ACoq_tmQuoteConstant of 'kername * bool
+    | ACoq_tmMkDefinition of 'ident * 'term
+    | ACoq_tmMkInductive of 'mutual_inductive_entry
+    | ACoq_tmUnquote of 'term
+    | ACoq_tmUnquoteTyped of 'term
+    | ACoq_tmExistingInstance of 'ident
 
 
 module type Quoter = sig
@@ -255,7 +255,7 @@ module type Quoter = sig
   (* val representsIndConstuctor : quoted_inductive -> Term.constr -> bool *)
   val inspectTerm : t -> (t, quoted_int, quoted_ident, quoted_name, quoted_sort, quoted_cast_kind, quoted_kernel_name, quoted_inductive, quoted_univ_instance, quoted_proj) structure_of_term
   val reduce_hnf : Environ.env -> Evd.evar_map -> t -> Evd.evar_map * t
-  val reduce_all : Environ.env -> Evd.evar_map -> t -> Evd.evar_map * t
+  val reduce_all : Environ.env -> Evd.evar_map -> ?red:Redexpr.red_expr ->  t -> Evd.evar_map * t
   val inspect_monad_term: quoted_monad_term -> (quoted_monad_term, t, quoted_ident, quoted_kernel_name, quoted_reduction_strategy, quoted_mind_entry) structure_of_monad_term
 end
 
@@ -873,12 +873,18 @@ struct
     else
       CErrors.user_err (str"inspect_term: cannot recognize " ++ print_term t)
 
-    let  inspect_monad_term  (t: quoted_monad_term) : (quoted_monad_term, t, quoted_ident, quoted_kernel_name, quoted_reduction_strategy, quoted_mind_entry) structure_of_monad_term =
-      CErrors.user_err (str"not yet implemented " ++ print_term t)
+    let  inspect_monad_term  (pgm: quoted_monad_term) : (quoted_monad_term, t, quoted_ident, quoted_kernel_name, quoted_reduction_strategy, quoted_mind_entry) structure_of_monad_term =
+      let (coConstr, args) = app_full pgm [] in
+      if Term.eq_constr coConstr tmReturn then
+      match args with
+      | _::h::[] -> ACoq_tmReturn h
+      | _ -> CErrors.user_err (print_term pgm ++ Pp.str ("has bad structure"))
+      else CErrors.user_err (str"inspect_term: cannot recognize " ++ print_term pgm)
       
+        
     let reduce_hnf : Environ.env -> Evd.evar_map -> t -> Evd.evar_map * t = reduce_hnf
 
-    let reduce_all  (env: Environ.env) (evm: Evd.evar_map) (trm: t) : Evd.evar_map * t = reduce_all env evm trm
+    let reduce_all   = reduce_all
           
     let rec unquote_int trm =
       let (h,args) = app_full trm [] in
@@ -1554,141 +1560,6 @@ let denote_term evdref (trm: Q.t) : Term.constr =
   else
     not_supported_verb trm "big_case" *)
   in aux trm
-  
-end
-
-module TermReify = Reify(TemplateCoqQuoter)
-
-
-
-
-
-module Denote =
-struct
-
-  open TemplateCoqQuoter
-
-  (** NOTE: Because the representation is lossy, I should probably
-   ** come back through elaboration.
-   ** - This would also allow writing terms with holes
-   **)
-
-
-
-  let denote_reduction_strategy (trm : quoted_reduction_strategy) : Redexpr.red_expr =
-    (* from g_tactic.ml4 *)
-    let default_flags = Redops.make_red_flag [FBeta;FMatch;FFix;FCofix;FZeta;FDeltaBut []] in
-    if Term.eq_constr trm tcbv then Cbv default_flags
-    else if Term.eq_constr trm tcbn then Cbn default_flags
-    else if Term.eq_constr trm thnf then Hnf
-    else if Term.eq_constr trm tall then Cbv all_flags
-    else if Term.eq_constr trm tlazy then Lazy all_flags
-    else not_supported_verb trm "denote_reduction_strategy"
-
-
-
-  let denote_local_entry evdref trm =
-    let (h,args) = app_full trm [] in
-      match args with
-	    x :: [] ->
-      if Term.eq_constr h tLocalDef then Entries.LocalDefEntry (TermReify.denote_term evdref x)
-      else (if  Term.eq_constr h tLocalAssum then Entries.LocalAssumEntry (TermReify.denote_term evdref x) else bad_term trm)
-      | _ -> bad_term trm
-
-  let denote_mind_entry_finite trm =
-    let (h,args) = app_full trm [] in
-      match args with
-	    [] ->
-      if Term.eq_constr h cFinite then Decl_kinds.Finite
-      else if  Term.eq_constr h cCoFinite then Decl_kinds.CoFinite
-      else if  Term.eq_constr h cBiFinite then Decl_kinds.BiFinite
-      else bad_term trm
-      | _ -> bad_term trm
-
-  let unquote_map_option f trm =
-    let (h,args) = app_full trm [] in
-    if Term.eq_constr h cSome then
-    match args with
-	  _ :: x :: _ -> Some (f x)
-      | _ -> bad_term trm
-    else if Term.eq_constr h cNone then
-    match args with
-	  _ :: [] -> None
-      | _ -> bad_term trm
-    else
-      not_supported_verb trm "unqote_map_option"
-
-  let denote_ucontext (trm : Term.constr) : Univ.universe_context =
-    Univ.UContext.empty (* FIXME *)
-
-  let denote_universe_context (trm : Term.constr) : bool * Univ.universe_context =
-    let (h, args) = app_full trm [] in
-    let b =
-      if Term.eq_constr h cMonomorphic_ctx then Some false
-      else if Term.eq_constr h cPolymorphic_ctx then Some true
-      else None
-    in
-    match b, args with
-    | Some poly, ctx :: [] ->
-      poly, denote_ucontext ctx
-    | _, _ -> bad_term trm
-
-  let denote_mind_entry_universes trm =
-    match denote_universe_context trm with
-    | false, ctx -> Monomorphic_ind_entry ctx
-    | true, ctx -> Polymorphic_ind_entry ctx
-
-  (* let denote_inductive_first trm =
-   *   let (h,args) = app_full trm [] in
-   *   if Term.eq_constr h tmkInd then
-   *     match args with
-   *       nm :: num :: _ ->
-   *       let s = (unquote_string nm) in
-   *       let (dp, nm) = split_name s in
-   *       (try
-   *         match Nametab.locate (Libnames.make_qualid dp nm) with
-   *         | Globnames.ConstRef c ->  CErrors.user_err (str "this not an inductive constant. use tConst instead of tInd : " ++ str s)
-   *         | Globnames.IndRef i -> (fst i, nat_to_int  num)
-   *         | Globnames.VarRef _ -> CErrors.user_err (str "the constant is a variable. use tVar : " ++ str s)
-   *         | Globnames.ConstructRef _ -> CErrors.user_err (str "the constant is a consructor. use tConstructor : " ++ str s)
-   *       with
-   *       Not_found ->   CErrors.user_err (str "Constant not found : " ++ str s))
-   *     | _ -> assert false
-   *   else
-   *     bad_term_verb trm "non-constructor" *)
-
-  let declare_inductive (env: Environ.env) (evm: Evd.evar_map) (body: Term.constr) : unit =
-    let (evm,body) = reduce_all env evm body in
-    let (_,args) = app_full body [] in (* check that the first component is Build_mut_ind .. *)
-    let evdref = ref evm in
-    let one_ind b1 : Entries.one_inductive_entry =
-      let (_,args) = app_full b1 [] in (* check that the first component is Build_one_ind .. *)
-      match args with
-      | mt::ma::mtemp::mcn::mct::[] ->
-        {
-          mind_entry_typename = unquote_ident mt;
-          mind_entry_arity = TermReify.denote_term evdref ma;
-          mind_entry_template = TemplateCoqQuoter.unquote_bool mtemp;
-          mind_entry_consnames = List.map unquote_ident (from_coq_list mcn);
-          mind_entry_lc = List.map (TermReify.denote_term evdref) (from_coq_list mct)
-        }
-      | _ -> raise (Failure "ill-typed one_inductive_entry")
-    in
-    let mut_ind mr mf mp mi uctx mpr : Entries.mutual_inductive_entry =
-      {
-        mind_entry_record = unquote_map_option (unquote_map_option unquote_ident) mr;
-        mind_entry_finite = denote_mind_entry_finite mf; (* inductive *)
-        mind_entry_params = List.map (fun p -> let (l,r) = (from_coq_pair p) in (unquote_ident l, (denote_local_entry evdref r)))
-            (List.rev (from_coq_list mp));
-        mind_entry_inds = List.map one_ind (from_coq_list mi);
-        mind_entry_universes = denote_mind_entry_universes uctx;
-        mind_entry_private = unquote_map_option TemplateCoqQuoter.unquote_bool mpr (*mpr*)
-      } in
-    match args with
-      mr::mf::mp::mi::univs::mpr::[] ->
-      ignore(Command.declare_mutual_inductive_with_eliminations (mut_ind mr mf mp mi univs mpr) [] [])
-    | _ -> raise (Failure "ill-typed mutual_inductive_entry")
-
 
   let monad_failure s k =
     CErrors.user_err  (str (s ^ " must take " ^ (string_of_int k) ^ " argument" ^ (if k > 0 then "s" else "") ^ ".")
@@ -1698,17 +1569,15 @@ struct
   let monad_failure_full s k prg =
     CErrors.user_err
       (str (s ^ " must take " ^ (string_of_int k) ^ " argument" ^ (if k > 0 then "s" else "") ^ ".") ++
-       str "While trying to run: " ++ fnl () ++ print_term prg ++ fnl () ++
+       str "While trying to run: " ++ fnl () ++ Q.print_term prg ++ fnl () ++
        str "Please file a bug with Template-Coq.")
 
-  let rec run_template_program_rec (k : Evd.evar_map * Term.constr -> unit)  ((evm, pgm) : Evd.evar_map * Term.constr) : unit =
+  
+  let rec run_template_program_rec (k : Evd.evar_map * Q.t -> unit)  ((evm, pgm) : Evd.evar_map * Q.quoted_monad_term) : unit =
     let env = Global.env () in
-    let (evm, (pgm:Term.constr)) = reduce_hnf env evm pgm in
-    let (coConstr, args) = app_full pgm [] in
-    if Term.eq_constr coConstr tmReturn then
-      match args with
-      | _::h::[] -> k (evm, h)
-      | _ -> monad_failure "tmReturn" 2
+    let (evm, pgm) = Q.reduce_hnf env evm pgm in
+    match Q.inspect_monad_term pgm with
+    | ACoq_tmReturn h -> k (evm, h)
     else if Term.eq_constr coConstr tmBind then
       match args with
       | _::_::a::f::[] ->
@@ -1886,6 +1755,143 @@ struct
                     k (evm, quote_ident name')
       | _ -> monad_failure "tmFreshName" 1
     else CErrors.user_err (str "Invalid argument or not yet implemented. The argument must be a TemplateProgram: " ++ Printer.pr_constr coConstr)
+  
+end
+
+module TermReify = Reify(TemplateCoqQuoter)
+
+
+
+
+
+module Denote =
+struct
+
+  open TemplateCoqQuoter
+
+  (** NOTE: Because the representation is lossy, I should probably
+   ** come back through elaboration.
+   ** - This would also allow writing terms with holes
+   **)
+
+
+
+  let denote_reduction_strategy (trm : quoted_reduction_strategy) : Redexpr.red_expr =
+    (* from g_tactic.ml4 *)
+    let default_flags = Redops.make_red_flag [FBeta;FMatch;FFix;FCofix;FZeta;FDeltaBut []] in
+    if Term.eq_constr trm tcbv then Cbv default_flags
+    else if Term.eq_constr trm tcbn then Cbn default_flags
+    else if Term.eq_constr trm thnf then Hnf
+    else if Term.eq_constr trm tall then Cbv all_flags
+    else if Term.eq_constr trm tlazy then Lazy all_flags
+    else not_supported_verb trm "denote_reduction_strategy"
+
+
+
+  let denote_local_entry evdref trm =
+    let (h,args) = app_full trm [] in
+      match args with
+	    x :: [] ->
+      if Term.eq_constr h tLocalDef then Entries.LocalDefEntry (TermReify.denote_term evdref x)
+      else (if  Term.eq_constr h tLocalAssum then Entries.LocalAssumEntry (TermReify.denote_term evdref x) else bad_term trm)
+      | _ -> bad_term trm
+
+  let denote_mind_entry_finite trm =
+    let (h,args) = app_full trm [] in
+      match args with
+	    [] ->
+      if Term.eq_constr h cFinite then Decl_kinds.Finite
+      else if  Term.eq_constr h cCoFinite then Decl_kinds.CoFinite
+      else if  Term.eq_constr h cBiFinite then Decl_kinds.BiFinite
+      else bad_term trm
+      | _ -> bad_term trm
+
+  let unquote_map_option f trm =
+    let (h,args) = app_full trm [] in
+    if Term.eq_constr h cSome then
+    match args with
+	  _ :: x :: _ -> Some (f x)
+      | _ -> bad_term trm
+    else if Term.eq_constr h cNone then
+    match args with
+	  _ :: [] -> None
+      | _ -> bad_term trm
+    else
+      not_supported_verb trm "unqote_map_option"
+
+  let denote_ucontext (trm : Term.constr) : Univ.universe_context =
+    Univ.UContext.empty (* FIXME *)
+
+  let denote_universe_context (trm : Term.constr) : bool * Univ.universe_context =
+    let (h, args) = app_full trm [] in
+    let b =
+      if Term.eq_constr h cMonomorphic_ctx then Some false
+      else if Term.eq_constr h cPolymorphic_ctx then Some true
+      else None
+    in
+    match b, args with
+    | Some poly, ctx :: [] ->
+      poly, denote_ucontext ctx
+    | _, _ -> bad_term trm
+
+  let denote_mind_entry_universes trm =
+    match denote_universe_context trm with
+    | false, ctx -> Monomorphic_ind_entry ctx
+    | true, ctx -> Polymorphic_ind_entry ctx
+
+  (* let denote_inductive_first trm =
+   *   let (h,args) = app_full trm [] in
+   *   if Term.eq_constr h tmkInd then
+   *     match args with
+   *       nm :: num :: _ ->
+   *       let s = (unquote_string nm) in
+   *       let (dp, nm) = split_name s in
+   *       (try
+   *         match Nametab.locate (Libnames.make_qualid dp nm) with
+   *         | Globnames.ConstRef c ->  CErrors.user_err (str "this not an inductive constant. use tConst instead of tInd : " ++ str s)
+   *         | Globnames.IndRef i -> (fst i, nat_to_int  num)
+   *         | Globnames.VarRef _ -> CErrors.user_err (str "the constant is a variable. use tVar : " ++ str s)
+   *         | Globnames.ConstructRef _ -> CErrors.user_err (str "the constant is a consructor. use tConstructor : " ++ str s)
+   *       with
+   *       Not_found ->   CErrors.user_err (str "Constant not found : " ++ str s))
+   *     | _ -> assert false
+   *   else
+   *     bad_term_verb trm "non-constructor" *)
+
+  let declare_inductive (env: Environ.env) (evm: Evd.evar_map) (body: Term.constr) : unit =
+    let (evm,body) = reduce_all env evm body in
+    let (_,args) = app_full body [] in (* check that the first component is Build_mut_ind .. *)
+    let evdref = ref evm in
+    let one_ind b1 : Entries.one_inductive_entry =
+      let (_,args) = app_full b1 [] in (* check that the first component is Build_one_ind .. *)
+      match args with
+      | mt::ma::mtemp::mcn::mct::[] ->
+        {
+          mind_entry_typename = unquote_ident mt;
+          mind_entry_arity = TermReify.denote_term evdref ma;
+          mind_entry_template = TemplateCoqQuoter.unquote_bool mtemp;
+          mind_entry_consnames = List.map unquote_ident (from_coq_list mcn);
+          mind_entry_lc = List.map (TermReify.denote_term evdref) (from_coq_list mct)
+        }
+      | _ -> raise (Failure "ill-typed one_inductive_entry")
+    in
+    let mut_ind mr mf mp mi uctx mpr : Entries.mutual_inductive_entry =
+      {
+        mind_entry_record = unquote_map_option (unquote_map_option unquote_ident) mr;
+        mind_entry_finite = denote_mind_entry_finite mf; (* inductive *)
+        mind_entry_params = List.map (fun p -> let (l,r) = (from_coq_pair p) in (unquote_ident l, (denote_local_entry evdref r)))
+            (List.rev (from_coq_list mp));
+        mind_entry_inds = List.map one_ind (from_coq_list mi);
+        mind_entry_universes = denote_mind_entry_universes uctx;
+        mind_entry_private = unquote_map_option TemplateCoqQuoter.unquote_bool mpr (*mpr*)
+      } in
+    match args with
+      mr::mf::mp::mi::univs::mpr::[] ->
+      ignore(Command.declare_mutual_inductive_with_eliminations (mut_ind mr mf mp mi univs mpr) [] [])
+    | _ -> raise (Failure "ill-typed mutual_inductive_entry")
+
+
+
 end
 
 
