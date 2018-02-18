@@ -319,6 +319,7 @@ Instance TemplateMonad_Monad : Monad TemplateMonad :=
   {| ret := @tmReturn ; bind := @tmBind |}.
 
 
+
 (*
 It is perhaps impossible to implement the tmQuote operation.
 The type of its argument can be arbitrary. We cannot
@@ -327,6 +328,13 @@ of those data
 
 Definition problem : TemplateMonad term :=
   tmQuote false.
+
+Recursive Extraction problem.
+
+(** val problem : term templateMonad **)
+let problem =
+  TmQuote (Obj.magic False)
+
 
 Definition problem2 : TemplateMonad term :=
   tmQuote (tmReturn 1).
@@ -342,4 +350,4 @@ while it is expected to have type "?A"
     Template.Ast.61+1, Template.kernel.univ.58)}"
 is a subtype of "Type@{Template.Ast.60}").
  *)
-*)
+ *)
