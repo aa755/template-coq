@@ -382,8 +382,9 @@ let denote_term evdref (trm: Constr.t) : Constr.t =
     | _ ->  not_supported_verb trm "big_case"
   in aux trm
 
-
-let denote_reduction_strategy (trm : quoted_reduction_strategy) : Redexpr.red_expr =
+let denote_reduction_strategy env evm (trm : quoted_reduction_strategy) : Redexpr.red_expr =
+  let trm = Reduction.whd_all env trm in
+  let (trm, args) = app_full trm [] in
   (* from g_tactic.ml4 *)
   let default_flags = Redops.make_red_flag [FBeta;FMatch;FFix;FCofix;FZeta;FDeltaBut []] in
   if Constr.equal trm tcbv then Cbv default_flags
@@ -391,6 +392,15 @@ let denote_reduction_strategy (trm : quoted_reduction_strategy) : Redexpr.red_ex
   else if Constr.equal trm thnf then Hnf
   else if Constr.equal trm tall then Cbv all_flags
   else if Constr.equal trm tlazy then Lazy all_flags
+  else if Constr.equal trm tunfold then
+    match args with
+    | name (* to unfold *) :: _ ->
+       let name = reduce_all env evm name in
+       let name = unquote_ident name in
+       (try Unfold [Locus.AllOccurrences, Tacred.evaluable_of_global_reference env (Nametab.global (CAst.make (Libnames.Qualid (Libnames.qualid_of_ident name))))]
+        with
+        | _ -> CErrors.user_err (str "Constant not found or not a constant: " ++ Pp.str (Names.Id.to_string name)))
+    | _ -> raise  (Failure "ill-typed reduction strategy")
   else not_supported_verb trm "denote_reduction_strategy"
 
 
@@ -466,7 +476,7 @@ let denote_mind_entry_universes trm =
  *     bad_term_verb trm "non-constructor" *)
 
 let declare_inductive (env: Environ.env) (evm: Evd.evar_map) (body: Constr.t) : unit =
-  let (evm,body) = reduce_all env evm body in
+  let body = reduce_all env evm body in
   let (_,args) = app_full body [] in (* check that the first component is Build_mut_ind .. *)
   let evdref = ref evm in
   let one_ind b1 : Entries.one_inductive_entry =
@@ -501,7 +511,8 @@ let declare_inductive (env: Environ.env) (evm: Evd.evar_map) (body: Constr.t) : 
 let monad_failure s k =
   CErrors.user_err  (str (s ^ " must take " ^ (string_of_int k) ^ " argument" ^ (if k > 0 then "s" else "") ^ ".")
                      ++ str "Please file a bug with Template-Coq.")
-
+let not_in_tactic s =
+  CErrors.user_err  (str ("You can not use " ^ s ^ " in a tactic."))
 
 let monad_failure_full s k prg =
   CErrors.user_err
@@ -509,45 +520,56 @@ let monad_failure_full s k prg =
        str "While trying to run: " ++ fnl () ++ print_term prg ++ fnl () ++
        str "Please file a bug with Template-Coq.")
 
-let rec run_template_program_rec (k : Evd.evar_map * Constr.t -> unit)  ((evm, pgm) : Evd.evar_map * Constr.t) : unit =
+let rec run_template_program_rec ?(intactic=false) (k : Evd.evar_map * Constr.t -> unit)  ((evm, pgm) : Evd.evar_map * Constr.t) : unit =
   let env = Global.env () in
-  let (evm, pgm) = reduce_hnf env evm pgm in
+  let pgm = Reduction.whd_all env pgm in
   let (coConstr, args) = app_full pgm [] in
-  if Constr.equal coConstr tmReturn then
+  let (glob_ref, universes) =
+    try
+      let open Constr in
+      match kind coConstr with
+      | Const (c, u) -> ConstRef c, u
+      | Ind (i, u) -> IndRef i, u
+      | Construct (c, u) -> ConstructRef c, u
+      | Var id -> VarRef id, Instance.empty
+      | _ -> raise Not_found
+    with _ ->
+      CErrors.user_err (str "Invalid argument or not yet implemented. The argument must be a TemplateProgram: " ++ pr_constr coConstr)
+  in
+  if Globnames.eq_gr glob_ref tmReturn then
     match args with
     | _::h::[] -> k (evm, h)
     | _ -> monad_failure "tmReturn" 2
-  else if Constr.equal coConstr tmBind then
+  else if Globnames.eq_gr glob_ref tmBind then
     match args with
     | _::_::a::f::[] ->
-       run_template_program_rec (fun (evm, ar) -> run_template_program_rec k (evm, Constr.mkApp (f, [|ar|]))) (evm, a)
+       run_template_program_rec ~intactic:intactic (fun (evm, ar) -> run_template_program_rec k (evm, Constr.mkApp (f, [|ar|]))) (evm, a)
     | _ -> monad_failure_full "tmBind" 4 pgm
-  else if Constr.equal coConstr tmDefinition then
+  else if Globnames.eq_gr glob_ref tmDefinition then
+    if intactic then not_in_tactic "tmDefinition" else
     match args with
     | name::typ::body::[] ->
-       let (evm, name) = reduce_all env evm name in
-       (* todo: let the user choose the reduction used for the type *)
-       let (evm, typ) = reduce_hnf env evm typ in
+       let name = reduce_all env evm name in
        let univs =
          if Flags.is_universe_polymorphism () then Polymorphic_const_entry (Evd.to_universe_context evm)
          else Monomorphic_const_entry (Evd.universe_context_set evm) in
        let n = Declare.declare_definition ~kind:Decl_kinds.Definition (unquote_ident name) ~types:typ (body, univs) in
        k (evm, Constr.mkConst n)
     | _ -> monad_failure "tmDefinition" 3
-  else if Constr.equal coConstr tmAxiom then
+  else if Globnames.eq_gr glob_ref tmAxiom then
+    if intactic then not_in_tactic "tmAxiom" else
     match args with
     | name::typ::[] ->
-       let (evm, name) = reduce_all env evm name in
-       let (evm, typ) = reduce_hnf env evm typ in
+       let name = reduce_all env evm name in
        let param = Entries.ParameterEntry (None, (typ, Monomorphic_const_entry (Evd.universe_context_set evm)), None) in
        let n = Declare.declare_constant (unquote_ident name) (param, Decl_kinds.IsDefinition Decl_kinds.Definition) in
        k (evm, Constr.mkConst n)
     | _ -> monad_failure "tmAxiom" 2
-  else if Constr.equal coConstr tmLemma then
+  else if Globnames.eq_gr glob_ref tmLemma then
+    if intactic then not_in_tactic "tmLemma" else  
     match args with
     | name::typ::[] ->
-       let (evm, name) = reduce_all env evm name in
-       let (evm, typ) = reduce_hnf env evm typ in
+       let name = reduce_all env evm name in
        let poly = Flags.is_universe_polymorphism () in
        let kind = (Decl_kinds.Global, poly, Decl_kinds.Definition) in
        let hole = CAst.make (Constrexpr.CHole (None, Misctypes.IntroAnonymous, None)) in
@@ -568,31 +590,31 @@ let rec run_template_program_rec (k : Evd.evar_map * Constr.t -> unit)  ((evm, p
     (* k (env, evm, unit_tt) *)
     (* )); *)
     | _ -> monad_failure "tmLemma" 2
-  else if Constr.equal coConstr tmMkDefinition then
+  else if Globnames.eq_gr glob_ref tmMkDefinition then
+    if intactic then not_in_tactic "tmExistingInstance" else  
     match args with
     | name::body::[] ->
-       let (evm, name) = reduce_all env evm name in
-       let (evm, def) = reduce_all env evm body in
+       let name = reduce_all env evm name in
        let evdref = ref evm in
-       let trm = denote_term evdref def in
+       let trm = denote_term evdref body in
        let (evm, _) = Typing.type_of env !evdref (EConstr.of_constr trm) in
        let _ = Declare.declare_definition ~kind:Decl_kinds.Definition (unquote_ident name) (trm, Monomorphic_const_entry (Evd.universe_context_set evm)) in
        k (evm, unit_tt)
     | _ -> monad_failure "tmMkDefinition" 2
-  else if Constr.equal coConstr tmQuote then
+  else if Globnames.eq_gr glob_ref tmQuote then
     match args with
     | _::trm::[] -> let qt = TermReify.quote_term env trm (* user should do the reduction (using tmEval) if they want *)
                     in k (evm, qt)
     | _ -> monad_failure "tmQuote" 2
-  else if Constr.equal coConstr tmQuoteRec then
+  else if Globnames.eq_gr glob_ref tmQuoteRec then
     match args with
     | _::trm::[] -> let qt = TermReify.quote_term_rec env trm in
                     k (evm, qt)
     | _ -> monad_failure "tmQuoteRec" 2
-  else if Constr.equal coConstr tmQuoteInductive then
+  else if Globnames.eq_gr glob_ref tmQuoteInductive then
     match args with
     | name::[] ->
-       let (evm, name) = reduce_all env evm name in
+       let name = reduce_all env evm name in
        let name = unquote_string name in
        let (dp, nm) = split_name name in
        (match Nametab.locate (Libnames.make_qualid dp nm) with
@@ -609,13 +631,13 @@ let rec run_template_program_rec (k : Evd.evar_map * Constr.t -> unit)  ((evm, p
         | _ -> CErrors.user_err (str name ++ str " does not seem to be an inductive."))
     (* k (evm, entry) *)
     | _ -> monad_failure "tmQuoteInductive" 1
-  else if Constr.equal coConstr tmQuoteConstant then
+  else if Globnames.eq_gr glob_ref tmQuoteConstant then
     match args with
-    | name::b::[] ->
-       let (evm, name) = reduce_all env evm name in
+    | name::bypass::[] ->
+       let name = reduce_all env evm name in
        let name = unquote_string name in
-       let (evm, b) = reduce_all env evm b in
-       let bypass = unquote_bool b in
+       let bypass = reduce_all env evm bypass in
+       let bypass = unquote_bool bypass in
        let entry = TermReify.quote_entry_aux bypass env evm name in
        let entry =
          match entry with
@@ -625,21 +647,21 @@ let rec run_template_program_rec (k : Evd.evar_map * Constr.t -> unit)  ((evm, p
        in
        k (evm, entry)
     | _ -> monad_failure "tmQuoteConstant" 2
-  else if Constr.equal coConstr tmQuoteUniverses then
+  else if Globnames.eq_gr glob_ref tmQuoteUniverses then
     match args with
     | _::[] -> let univs = Environ.universes env in
                k (evm, quote_ugraph univs)
     | _ -> monad_failure "tmQuoteUniverses" 1
-  else if Constr.equal coConstr tmPrint then
+  else if Globnames.eq_gr glob_ref tmPrint then
     match args with
     | _::trm::[] -> Feedback.msg_info (pr_constr trm);
                     k (evm, unit_tt)
     | _ -> monad_failure "tmPrint" 2
-  else if Constr.equal coConstr tmFail then
+  else if Globnames.eq_gr glob_ref tmFail then
     match args with
     | _::trm::[] -> CErrors.user_err (str (unquote_string trm))
     | _ -> monad_failure "tmFail" 2
-  else if Constr.equal coConstr tmAbout then
+  else if Globnames.eq_gr glob_ref tmAbout then
     match args with
     | id::[] -> let id = unquote_string id in
                 (try
@@ -649,44 +671,50 @@ let rec run_template_program_rec (k : Evd.evar_map * Constr.t -> unit)  ((evm, p
                  with
                  | Not_found -> k (evm, Constr.mkApp (cNone, [|tglobal_reference|])))
     | _ -> monad_failure "tmAbout" 1
-  else if Constr.equal coConstr tmCurrentModPath then
+  else if Globnames.eq_gr glob_ref tmCurrentModPath then
     match args with
     | _::[] -> let mp = Lib.current_mp () in
                (* let dp' = Lib.cwd () in (* different on sections ? *) *)
                let s = quote_string (Names.ModPath.to_string mp) in
                k (evm, s)
     | _ -> monad_failure "tmCurrentModPath" 1
-  else if Constr.equal coConstr tmEval then
+  else if Globnames.eq_gr glob_ref tmEval then
     match args with
     | s(*reduction strategy*)::_(*type*)::trm::[] ->
-       let red = denote_reduction_strategy s in
-       let (evm, trm) = reduce_all ~red env evm trm
+       let red = denote_reduction_strategy env evm s in
+       let (evm, trm) = reduce env evm red trm
        in k (evm, trm)
     | _ -> monad_failure "tmEval" 3
-  else if Constr.equal coConstr tmMkInductive then
+  else if Globnames.eq_gr glob_ref tmMkInductive then
     match args with
     | mind::[] -> declare_inductive env evm mind;
                   k (evm, unit_tt)
     | _ -> monad_failure "tmMkInductive" 1
-  else if Constr.equal coConstr tmUnquote then
+  else if Globnames.eq_gr glob_ref tmUnquote then
     match args with
     | t::[] ->
-       let (evm, t) = reduce_all env evm t in
-       let evdref = ref evm in
-       let t' = denote_term evdref t in
-       let evm = !evdref in
-       let typ = EConstr.to_constr evm (Retyping.get_type_of env evm (EConstr.of_constr t')) in
-       (* todo: we could declare a new universe <= Coq.Init.Specif.7 or 8 instead of using [texistT_typed_term] *)
-       (* let (evm, u) = Evd.fresh_sort_in_family env evm Sorts.InType in *)
-       (* (env, evm, Constr.mkApp (texistT, [|Constr.mkSort u; *)
-       (*                                   Constr.mkLambda (Names.Name (Names.Id.of_string "T"), Constr.mkSort u, Constr.mkRel 1); *)
-       (*                                   typ; t'|])) *)
-       k (evm, Constr.mkApp (texistT_typed_term, [|typ; t'|]))
+       (try
+         let t = reduce_all env evm t in
+         let evdref = ref evm in
+         let t' = denote_term evdref t in
+         let evm = !evdref in
+         let typ = EConstr.to_constr evm (Retyping.get_type_of env evm (EConstr.of_constr t')) in
+         let make_typed_term typ term evm =
+           match texistT_typed_term with
+           | ConstructRef ctor ->
+             let u = (Univ.Instance.to_array universes).(1) in
+             let term = Constr.mkApp
+               (Constr.mkConstructU (ctor, Univ.Instance.of_array [|u|]), [|typ; t'|]) in
+             let evm, _ = Typing.type_of env evm (EConstr.of_constr term) in
+               (evm, term)
+         in
+           k (make_typed_term typ t' evm)
+        with Reduction.NotArity -> CErrors.user_err (str "unquoting ill-typed term"))
     | _ -> monad_failure "tmUnquote" 1
-  else if Constr.equal coConstr tmUnquoteTyped then
+  else if Globnames.eq_gr glob_ref tmUnquoteTyped then
     match args with
     | typ::t::[] ->
-       let (evm, t) = reduce_all env evm t in
+       let t = reduce_all env evm t in
        let evdref = ref evm in
        let t' = denote_term evdref t in
        let t' = Typing.e_solve_evars env evdref (EConstr.of_constr t') in
@@ -694,9 +722,23 @@ let rec run_template_program_rec (k : Evd.evar_map * Constr.t -> unit)  ((evm, p
        let evm = !evdref in
        k (evm, EConstr.to_constr evm t')
     | _ -> monad_failure "tmUnquoteTyped" 2
-  else if Constr.equal coConstr tmFreshName then
+  else if Globnames.eq_gr glob_ref tmFreshName then
     match args with
     | name::[] -> let name' = Namegen.next_ident_away_from (unquote_ident name) (fun id -> Nametab.exists_cci (Lib.make_path id)) in
                   k (evm, quote_ident name')
     | _ -> monad_failure "tmFreshName" 1
+  else if Globnames.eq_gr glob_ref tmExistingInstance then
+    match args with
+    | name :: [] -> Classes.existing_instance true (CAst.make (Libnames.Qualid (Libnames.qualid_of_ident (unquote_ident name)))) None
+    | _ -> monad_failure "tmExistingInstance" 1
+  else if Globnames.eq_gr glob_ref tmInferInstance then
+    match args with
+    | typ :: [] ->
+       (try
+          let (evm,t) = Typeclasses.resolve_one_typeclass env evm (EConstr.of_constr typ) in
+          k (evm, Constr.mkApp (cSome, [| typ; EConstr.to_constr evm t|]))
+        with
+          Not_found -> k (evm, Constr.mkApp (cNone, [|typ|]))
+       )
+    | _ -> monad_failure "tmInferInstance" 1
   else CErrors.user_err (str "Invalid argument or not yet implemented. The argument must be a TemplateProgram: " ++ pr_constr coConstr)
