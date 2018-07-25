@@ -303,7 +303,7 @@ let unquote_inductive trm =
          | Globnames.VarRef _ -> CErrors.user_err (str "the constant is a variable. use tVar : " ++ str s)
          | Globnames.ConstructRef _ -> CErrors.user_err (str "the constant is a consructor. use tConstructor : " ++ str s)
        with
-         Not_found ->   CErrors.user_err (str "Constant not found : " ++ str s))
+         Not_found ->   CErrors.user_err (str "Constant not found in unquote_inductive: " ++ str s ++ str " id is "++ str (Names.string_of_id nm) ++ str " dirpath is "++ str (Names.string_of_dirpath dp)))
     | _ -> assert false
   else
     bad_term_verb trm "non-constructor"
@@ -342,7 +342,7 @@ let denote_term evdref (trm: Constr.t) : Constr.t =
           | Globnames.VarRef _ -> CErrors.user_err (str "the constant is a variable. use tVar : " ++ Pp.str (Libnames.string_of_qualid s))
           | Globnames.ConstructRef _ -> CErrors.user_err (str "the constant is a consructor. use tConstructor : "++ Pp.str (Libnames.string_of_qualid s))
         with
-          Not_found -> CErrors.user_err (str "Constant not found : " ++ Pp.str (Libnames.string_of_qualid s)))
+          Not_found -> CErrors.user_err (str "Constant not found in denote_term: " ++ Pp.str (Libnames.string_of_qualid s)))
     | ACoq_tConstruct (i,idx,_) ->
        let ind = unquote_inductive i in
        Constr.mkConstruct (ind, unquote_int idx + 1)
@@ -567,6 +567,7 @@ let rec run_template_program_rec (k : Evd.evar_map * Constr.t -> unit)  ((evm, p
     (* let evm, t = Evd.fresh_global env evm gr in k (env, evm, t) *)
     (* k (env, evm, unit_tt) *)
     (* )); *)
+
     | _ -> monad_failure "tmLemma" 2
   else if Constr.equal coConstr tmMkDefinition then
     match args with
@@ -595,7 +596,8 @@ let rec run_template_program_rec (k : Evd.evar_map * Constr.t -> unit)  ((evm, p
        let (evm, name) = reduce_all env evm name in
        let name = unquote_string name in
        let (dp, nm) = split_name name in
-       (match Nametab.locate (Libnames.make_qualid dp nm) with
+       (* CErrors.user_err (str "Constant not found in tmquote inductive: " ++ str name ++ str " id is "++ str (Names.string_of_id nm) ++ str " dirpath is "++ str (Names.string_of_dirpath dp)); *)
+       (try  (match Nametab.locate (Libnames.make_qualid dp nm) with
         | Globnames.IndRef ni ->
            let t = TermReify.quote_mind_decl env (fst ni) in
            let _, args = Constr.destApp t in
@@ -607,6 +609,9 @@ let rec run_template_program_rec (k : Evd.evar_map * Constr.t -> unit)  ((evm, p
         (* let c = Environ.lookup_mind (fst ni) env in (\* FIX: For efficienctly, we should also export (snd ni)*\) *)
         (* TermReify.quote_mut_ind env c *)
         | _ -> CErrors.user_err (str name ++ str " does not seem to be an inductive."))
+        with 
+        Not_found ->   CErrors.user_err (str "Constant not found in tmQuoteInductive: " ++ str name ++ str " id is "++ str (Names.string_of_id nm) ++ str " dirpath is "++ str (Names.string_of_dirpath dp)))
+    
     (* k (evm, entry) *)
     | _ -> monad_failure "tmQuoteInductive" 1
   else if Constr.equal coConstr tmQuoteConstant then

@@ -64,7 +64,13 @@ let clean_name s =
     s :: rst -> s
   | [] -> raise (Failure "Empty name cannot be quoted")
 
+let fix_section_name (s:string) : string =
+match String.index_opt s '#' with
+| None -> s
+| Some i -> String.mapi (fun ii c -> if (ii=i) then '.' else c) s
+
 let split_name s : (Names.DirPath.t * Names.Id.t) =
+  let s = fix_section_name s in
   let ss = List.rev (CString.split '.' s) in
   match ss with
     nm :: rst ->
