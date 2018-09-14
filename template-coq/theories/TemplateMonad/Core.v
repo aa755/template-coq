@@ -72,6 +72,14 @@ Cumulative Inductive TemplateMonad@{t u} : Type@{t} -> Type :=
 | tmInferInstance : forall A : Type@{t}, TemplateMonad (option A)
 .
 
+(* this does not buy us anything.
+the argument of erase is [TemplateMonad@{t u} A]
+constructing which is problematic:
+the term [genLens State] already does not
+typecheck due to universe inconsistency.*)
+Cumulative Inductive TemplateMonadG@{t u} : Type@{t} -> Prop :=
+| erase: forall A, TemplateMonad@{t u} A -> TemplateMonadG A.
+
 Definition print_nf {A} (msg : A) : TemplateMonad unit
   := tmBind (tmEval all msg) tmPrint.
 
